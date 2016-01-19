@@ -1,0 +1,29 @@
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <div class="oe_span12">
+            <h2 class="oe_slogan">Users Lockout System</h2>
+            <h3 class="oe_slogan">Secure Odoo by locking the Users if attempts are more</h3>
+        </div>
+        <div class="oe_span6">
+            <p class="oe_mt32">
+Configure the Lockout System for Number of Wrong Attempts and Unlock Time. Only Administration Settings Users able modify it.
+            </p>
+        </div>
+        <div class="oe_span6">
+            <div class="oe_row_img oe_centered">
+                <img class="oe_picture oe_screenshot" src="lockout_screen1.png">
+            </div>
+        </div>
+        <div class="oe_span6">
+            <p class="oe_mt32">
+Configure the Lockout System for Number of Wrong Attempts and Unlock Time. Only Administration Settings Users able modify it.
+            </p>
+        </div>
+        <div class="oe_span6">
+            <div class="oe_row_img oe_centered">
+                <img class="oe_picture oe_screenshot" src="lockout_screen2.png">
+            </div>
+        </div>
+    </div>
+</section>
+

@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<openerp>
+    <data>
+        
+        <!--  Lockout Form View in Company Configuration-->
+
+        <record model="ir.ui.view" id="view_company_form_inh_lockout">
+            <field name="name">res.company.form.inh.lockout</field>
+            <field name="model">res.company</field>
+	    <field name="inherit_id" ref="base.view_company_form"/>
+            <field name="arch" type="xml">
+                <group name="account_grp" position="after">
+                    <group name="lockout_grp" string="Lockout" groups="base.group_system" >
+                        <field name="lockouttime_id" required="1"/>
+                        <field name="attempt_cnt" required="1"/>
+                    </group>
+                </group>
+	    </field>
+	</record>
+
+        <record model="ir.ui.view" id="base_view_users_form_inh_lockout">
+            <field name="name">base.users.form.inh.lockout</field>
+            <field name="model">res.users</field>
+	    <field name="inherit_id" ref="base.view_users_form"/>
+            <field name="arch" type="xml">
+                <field name="active" position="after">
+                        <field name="flg_userlocked" groups="base.group_system" onchange="onchange_flg_userlocked(flg_userlocked)"/>
+                        <field name="userlocked_datetime" invisible="1"/>
+                        <field name="wronglogin_cnt" invisible="1"/>
+                </field>
+	    </field>
+	</record>
+
+    </data>
+</openerp>

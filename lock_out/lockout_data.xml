@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<openerp>
+    <data noupdate="1">
+        
+        <record forcecreate="True" id="ir_cron_scheduler_action_lockout" model="ir.cron">
+            <field name="name">Run Lockout Scheduler</field>
+            <field eval="True" name="active"/>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">2</field>
+            <field name="interval_type">minutes</field>
+            <field name="numbercall">-1</field>
+            <field eval="False" name="doall"/>
+            <field eval="'res.company'" name="model"/>
+            <field eval="'run_scheduler_lockout'" name="function"/>
+            <field eval="'()'" name="args"/>
+        </record>        
+       
+        <record id="lockout_time_15" model="lockout.time">
+            <field name="name">15 Minutes</field>
+            <field name="value">15</field>
+            <field name="sequence">1</field>
+        </record>
+        <record id="lockout_time_30" model="lockout.time">
+            <field name="name">30 Minutes</field>
+            <field name="value">30</field>
+            <field name="sequence">2</field>
+        </record>
+        <record id="lockout_time_1hour" model="lockout.time">
+            <field name="name">1 Hour</field>
+            <field name="value">60</field>
+            <field name="sequence">3</field>
+        </record>
+        <record id="lockout_time_24hours" model="lockout.time">
+            <field name="name">24 Hours</field>
+            <field name="value">1440</field>
+            <field name="sequence">4</field>
+        </record>
+         <record id="lockout_time_never" model="lockout.time">
+            <field name="name">Never</field>
+            <field name="value">0</field>
+            <field name="sequence">5</field>
+        </record>
+        
+    </data>
+</openerp>
+

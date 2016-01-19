@@ -1,0 +1,336 @@
+from openerp.osv import osv, fields
+import time
+import datetime
+from dateutil.relativedelta import relativedelta
+import logging
+from openerp.tools.translate import _
+from openerp import api, tools
+from dateutil.relativedelta import *
+from openerp import SUPERUSER_ID
+from openerp.tools import html2plaintext
+import math
+import re
+
+_logger = logging.getLogger(__name__)
+
+class lock_out(osv.osv):    
+    _name = "lock_out"
+    _description= "Lock out Mechanism"
+    _columns={
+                'user_id': fields.many2one('res.users', 'Responsible', track_visibility='onchange'),
+                'product_id':fields.many2one('product.product','Product'),
+                'priority': fields.selection([('0','Not Entered'), ('1','Low'), ('2','Medium'), ('3','High'), ('4','Immediate')], 'Priority'),
+                'parent_id':fields.many2one('crm.helpdesk','Parent'),
+                'from_mail':fields.boolean('From Mail?'),
+                'seq_sent':fields.boolean('Sequence Sent?'),
+              }
+    _defaults={
+               'sequence':lambda obj, cr, uid, context:'',
+               'from_mail':False,
+               'seq_sent':False,
+               }
+
+    def default_get(self, cr, uid, fields, context=None):  
+        return super(crm_helpdesk, self).default_get(cr, uid, fields, context=context)
+    # -------------------------------------------------------
+    # Mail gateway
+    # -------------------------------------------------------
+    def message_update(self, cr, uid, ids, msg_dict, update_vals=None, context=None):
+        obj =self.browse(cr, uid, ids[0],context=context)
+        if msg_dict.has_key('body') and '<div class="gmail_extra">' in msg_dict['body']:
+            msg_dict['body'] = msg_dict['body'].split('<div class="gmail_extra">')[0]
+        if msg_dict.get('subject'):
+            if "TKT/" in msg_dict['subject']:
+                preids = self.pool.get('ir.sequence').search(cr, uid, [('code','=','crm.helpdesk')])
+                pre = self.pool.get('ir.sequence').read(cr, uid, preids and preids[0],['padding'])
+                seq = msg_dict['subject'][msg_dict['subject'].index('TKT/'):msg_dict['subject'].index('TKT/')+9+pre['padding']]
+                seq = seq.replace('[','').replace(']','')
+                seqids = self.search(cr, uid, [('sequence','=',seq), ('state','!=','done')])
+                seqidsdone = self.search(cr, uid, [('sequence','=',seq), ('state','=','done')],order='id desc')
+                context['change_fromto'] = False
+                if seqidsdone and len(seqidsdone):
+                    #frm_mail = msg_dict['email_from'][msg_dict['email_from'].index('<')+1:msg_dict['email_from'].index('>')]
+                    frm_mail = re.search(r'[\w\.-]+@[\w\.-]+', msg_dict['email_from']).group(0)
+                    partnerids = self.pool.get('res.partner').search(cr, uid, [('email','=',frm_mail)])
+                    context['from_mail'] = True
+                    context['message_unread'] = True
+                    context['change_fromto'] = True
+                    context['msg_dict'] =msg_dict
+                    resid = self.create(cr, uid, {'name':msg_dict['subject'],'description':html2plaintext(msg_dict.get('body')) if msg_dict.get('body') else '','email_from':msg_dict['email_from'],'partner_id':partnerids and partnerids[0] or False, 'message_unread':True}, context=context)
+                    context['no_message'] = True
+                    objnew =self.browse(cr, uid, resid,context=context)
+                    post_values = {
+                           'partner_ids': partnerids,
+                           'subject':"[%s] - %s"%(objnew.sequence,objnew.name),
+                           'body': msg_dict.get('body'),
+                           'attachments':msg_dict.get('attachments'),
+                           }
+                    msg_id = self.message_post(cr, SUPERUSER_ID, [resid], type='email', subtype=False, context=context, **post_values)
+        return super(crm_helpdesk, self).message_update(cr, uid, ids, msg_dict, update_vals=update_vals, context=context)
+    
+    @api.cr_uid_ids_context    
+    def message_post(self, cr, uid, thread_id, body='', subject=None, type='notification', subtype=None, parent_id=False, attachments=None, context=None, content_subtype='html', **kwargs):
+        """ Overrides mail_thread message_post so that we can set the date of last action field when
+            a new message is posted on the issue.
+        """
+        seq_sent = True
+        if context is None:
+            context = {}
+        if isinstance(thread_id, (tuple, list)):  
+            thread_id = len(thread_id)>0 and thread_id[0] or False
+        if context.has_key('thread_model') and context['thread_model'] == 'crm.helpdesk' and thread_id:
+            hobj = self.pool.get('crm.helpdesk').browse(cr, uid, thread_id)
+            if hobj.state == 'done':        
+                return  
+        if thread_id:     
+            hobj = self.pool.get('crm.helpdesk').browse(cr, uid, thread_id)
+            if not hobj.seq_sent and kwargs.has_key('to'):
+                email_to = re.search(r'[\w\.-]+@[\w\.-]+', kwargs['to']).group(0)
+                partners = self.pool.get('res.partner').search(cr, uid, [('email','=',email_to)])
+                kwargs['partner_ids'] = partners
+            if not subject:                
+                subject = '[' + hobj.sequence + '] - ' + hobj.name
+            if context.has_key('change_fromto') and context['change_fromto']:
+                context['change_fromto'] = False
+                if not kwargs.has_key('from') and context.has_key('msg_dict'):
+                    if context['msg_dict'].has_key('from'):
+                        kwargs['from'] = context['msg_dict']['from']
+                    if context['msg_dict'].has_key('cc'):
+                        kwargs['cc'] = context['msg_dict']['cc']
+                    #if context['msg_dict'].has_key('message_id'):
+                    #    kwargs['message_id'] = context['msg_dict']['message_id']
+                    if context['msg_dict'].has_key('to'):
+                        kwargs['to'] = context['msg_dict']['to']
+                    #if context['msg_dict'].has_key('date'):
+                    #    kwargs['date'] = context['msg_dict']['date']
+                    if context['msg_dict'].has_key('author_id'):
+                        kwargs['author_id'] = context['msg_dict']['author_id']
+                    if context['msg_dict'].has_key('email_from'):
+                        kwargs['email_from'] = context['msg_dict']['email_from']
+                    #kwargs['parent_id'] = False
+                    email_to = re.search(r'[\w\.-]+@[\w\.-]+', kwargs['to']).group(0)
+                    partners = self.pool.get('res.partner').search(cr, uid, [('email','=',email_to)])
+                    kwargs['partner_ids'] = partners
+                    context['msg_dict'] = {}           
+        res = super(crm_helpdesk, self).message_post(cr, uid, thread_id, body=body, subject=subject, type=type, subtype=subtype, parent_id=parent_id, attachments=attachments, context=context, content_subtype=content_subtype, **kwargs)
+        if thread_id:     
+            hobj = self.pool.get('crm.helpdesk').browse(cr, uid, thread_id)
+            if not hobj.seq_sent:
+                hobj.seq_sent = True
+                rt = self.send_ticket_no(cr, uid, [thread_id], context=context)
+        return res    
+
+    def message_new(self, cr, uid, msg, custom_values=None, context=None):
+        context['from_mail'] = True
+        msg['subtype_id'] = False
+        return super(crm_helpdesk, self).message_new(cr, uid, msg, custom_values=custom_values, context=context)
+        
+    #def stop_showing_groups_suggestions(self, cr, uid, user_id, context=None):
+    #    """Update display_groups_suggestions value to False"""
+    #    if context is None:
+    #        context = {}
+    #    self.write(cr, uid, user_id, {"display_groups_suggestions": False}, context)    
+    
+    #def message_subscribe(self, cr, uid, ids, partner_ids, subtype_ids=None, context=None):
+    #    return True
+
+    #def message_get_partner_info_from_emails(self, cr, uid, emails, link_mail=False, context=None):
+    #    return self.pool.get('mail.thread').message_get_partner_info_from_emails(cr, uid, emails, link_mail=link_mail, context=context)
+
+    #def message_get_suggested_recipients(self, cr, uid, ids, context=None):
+    #    return dict((res_id, list()) for res_id in ids)
+        
+    def create(self, cr, uid, values, context=None):
+        if values.get('name'):
+            if "TKT/" in values['name']:
+                preids = self.pool.get('ir.sequence').search(cr, uid, [('code','=','crm.helpdesk')])
+                pre = self.pool.get('ir.sequence').read(cr, uid, preids and preids[0],['padding'])
+                seq = values['name'][values['name'].index('TKT/'):values['name'].index('TKT/')+9+pre['padding']]
+                seq = seq.replace('[','').replace(']','')
+                seqids = self.search(cr, uid, [('sequence','=',seq), ('state','!=','done')])
+                seqidsdone = self.search(cr, uid, [('sequence','=',seq), ('state','=','done')],order='id desc')
+                if seqids and len(seqids):
+                    return seqids[0]  
+                elif seqidsdone and len(seqidsdone):
+                    values['parent_id'] = seqidsdone[0]  
+                    values['sequence'] = 'TKT'
+                    values['name'] = values['name'].replace(seq,'').replace('[','').replace(']','').replace('-','').strip()
+                    values['user_id'] = False
+                    context['from_mail'] = True
+                    context['change_fromto']=True
+            
+            values['from_mail'] = context.has_key('from_mail') and context['from_mail'] or (values.has_key('from_mail') and values['from_mail'] or False)
+            email_from = values['email_from']
+            if email_from:
+                if email_from:#if '<' in email_from and '>' in email_from:
+                    mail = re.search(r'[\w\.-]+@[\w\.-]+', email_from).group(0)
+                    #mail = email_from[email_from.index('<')+1:email_from.index('>')]
+                    partners = self.pool.get('res.partner').search(cr, uid, [('email','=',mail)])
+                    if not partners:
+                        values['email_from'] = mail                        
+                        partner = self.pool.get('res.partner').create(cr, uid, {'name':len(email_from[:email_from.index('<')])>0 and email_from[:email_from.index('<')] or mail.split('@')[0], 'email':mail})                        
+                        values['partner_id'] = partner
+            if ":" in values['name']:
+                name = values['name'].split(':')
+                values.update({
+                           'name': name and name[1],
+                           })
+        if values.get('sequence','TKT')=='TKT':
+            values['sequence'] = self.pool.get('ir.sequence').get(cr, uid, 'crm.helpdesk') or 'TKT'
+        
+        #context['partner_ids'] = partner and [(4, partner)] or None,
+        #context['notified_partner_ids'] = partner and [(4, partner)] or None, 
+        hd = super(crm_helpdesk, self).create(cr, uid, values, context=context)
+        return hd        
+        
+    def send_ticket_no(self, cr, uid, ids, context=None):
+        for record in self.browse(cr, uid, ids, context=context):
+            partner_id = record.partner_id and record.partner_id.id
+            self.write(cr, uid, ids, {'message_follower_ids':[(4, partner_id)]})
+            post_values = {
+                           'partner_ids': [partner_id],
+                           'subject':"[%s] - %s"%(record.sequence,record.name),
+                           'body': '<div><p>Dear %s,</p>'
+                                '<p>Support Ticket - %s has been raised for your Request. Please Note the Ticket ID for Further Communication Reference.</p></div>'
+                                '<p>Regards,</p>'
+                                '<p>Support Team</p>'%(record.partner_id.name,record.sequence),
+                           }            
+            #context['mail_create_nosubscribe'] = True
+            #context['from_mail'] = True
+            #context['mail_create_nolog'] = True
+            
+            msg_id = self.message_post(cr, SUPERUSER_ID, [record.id], type='email', subtype=False, context=context, **post_values)
+            #for support manager
+            category_id=self.pool.get('ir.module.category').search(cr,uid,[('name','=','Support')],context=context)
+            group_ids=self.pool.get('res.groups').search(cr,uid,[('category_id','=',category_id[0]),('name','=','Manager')],context=context)
+            group_obj = self.pool.get('res.groups').browse(cr, uid,group_ids[0],context=context)
+            part_ids =[]
+            if group_obj.users:
+                    for usr in group_obj.users:
+                        if usr.id!=SUPERUSER_ID:
+                            part_ids.append(usr.partner_id.id)
+                            
+                    post_values = {
+                                    'partner_ids': [],
+                                    'subject':"[%s] - %s"%(record.sequence,record.name),
+                                    'body':"Support Request was received from the Client '%s' and Support Ticket raised for the Request is - %s . Need to add Responsible Person for this Request."%(record.partner_id.name,record.sequence),
+                           }
+                    if part_ids:
+                        msg_id = self.message_post(cr, uid, [record.id], type='notification', subtype='False', context=context, **post_values)            
+                        for part in part_ids:
+                            self.pool.get('mail.notification').create(cr, uid, {'partner_id':part,'message_id':msg_id,'starred':True})
+        return True    
+
+    def case_escalate(self, cr, uid, ids, context=None):
+        """ Escalates case to parent level """
+        data = {'active': True}
+        for case in self.browse(cr, uid, ids, context=context):
+            if case.section_id and case.section_id.user_id:
+                data['section_id'] = case.section_id.id
+                data['user_id'] = case.section_id.user_id.id
+            else:
+                raise osv.except_osv(_('Error!'), _('You can not escalate, you are already at the top level regarding your sales-team category.'))
+            self.write(cr, uid, [case.id], data, context=context)
+        return True
+
+    def button_open(self, cr, uid, ids, context=None):
+        for record in self.browse(cr, uid, ids, context=context):      
+            self.write(cr, uid, [record.id], {'state':'open','from_mail':True}, context=context)
+            partner_id = record.partner_id and record.partner_id.id
+            post_values = {
+                           'partner_ids': [partner_id],
+                           'subject':"[%s] - %s"%(record.sequence,record.name),
+                           'body': '<div><p>Dear %s,</p>'
+                                '<p>Support Ticket - %s Status has been changed to In-Progress.</p></div>'
+                                '<p>Regards,</p>'
+                                '<p>Support Team</p>'%(record.partner_id.name,record.sequence),
+                           }
+            msg_id = self.message_post(cr, uid, [record.id], type='comment', subtype='mail.mt_comment', context=context, **post_values)
+            userid = record.user_id.partner_id and record.user_id.partner_id.id
+            post_values = {
+                           'partner_ids': [userid],
+                           'subject':"[%s] - %s"%(record.sequence,record.name),
+                           'body':"Ticket Assigned to %s. For More details check %s."%(record.user_id.name,record.sequence),
+                           }
+            msg_id = self.message_post(cr, uid, [record.id], type='comment', subtype=False, context=context, **post_values)            
+        return True
+
+    def button_pending(self, cr, uid, ids, context=None):
+        self.write(cr, uid, ids,{'state':'pending'}, context=context)
+        for record in self.browse(cr, uid, ids, context=context):
+            partner_id = record.partner_id and record.partner_id.id
+            post_values = {
+                           'partner_ids': [partner_id],
+                           'subject':"[%s] - %s"%(record.sequence,record.name),
+                           'body': '<div><p>Dear %s,</p>'
+                                '<p>Support Ticket - %s Status has been changed to Pending. Please communicate back to us as soon as possible to take this issue forward.</p></div>'
+                                '<p>Regards,</p>'
+                                '<p>Support Team</p>'%(record.partner_id.name,record.sequence),
+                           }
+            msg_id = self.message_post(cr, uid, [record.id], type='comment', subtype='mail.mt_comment', context=context, **post_values)           
+        return True    
+
+    def button_done(self, cr, uid, ids, context=None):
+        self.write(cr, uid, ids,{'state':'done'}, context=context)
+        for record in self.browse(cr, uid, ids, context=context):
+            partner_id = record.partner_id and record.partner_id.id
+            post_values = {
+                           'partner_ids': [partner_id],
+                           'subject':"[%s] - %s"%(record.sequence,record.name),
+                           'body': '<div><p>Dear %s,</p>'
+                                '<p>Ticket - %s Status has been changed to Closed. We hope you are Happy with our Support.</p></div>'
+                                '<p>Regards,</p>'
+                                '<p>Support Team</p>'%(record.partner_id.name,record.sequence),
+                           }
+            msg_id = self.message_post(cr, uid, [record.id], type='comment', subtype='mail.mt_comment', context=context, **post_values)        
+        return True
+
+    def button_cancel(self, cr, uid, ids, context=None):
+        self.write(cr, uid, ids,{'state':'cancel'}, context=context)
+        return True   
+        
+    #
+    # Scheduler
+    #
+    def run_scheduler(self, cr, uid, context=None):
+        '''
+        Call the scheduler to send Notifications about the Status of the Tickets.
+        '''
+        if context is None:
+            context = {}
+        #To Notify the Managers, if Ticket is not Closed by Deadline
+        today = time.strftime('%Y-%m-%d')
+        deadlineids  = self.search(cr, uid, [('state','not in',['done','cancel']),('date_deadline','<=',today)])
+        body = '<table><tr><th style="padding-left:15px;width:25%">Ticket No.</th><th style="padding-left:15px;">Responsible</th><th style="padding-left:15px;">Client</th><th style="padding-left:15px;">Deadline</th></tr>'
+        for record in self.browse(cr, uid, deadlineids):
+            body+='<tr><td style="padding-left:15px;border-bottom: 1px solid #ddd;">%s</td><td style="padding-left:15px;border-bottom: 1px solid #ddd;">%s</td><td style="padding-left:15px;border-bottom: 1px solid #ddd;">%s</td><td style="padding-left:15px;border-bottom: 1px solid #ddd;">%s</td></tr>'%(record.sequence, record.user_id.partner_id.name, record.partner_id.name, record.date_deadline)
+        body+='</table>'    
+        category_id=self.pool.get('ir.module.category').search(cr,uid,[('name','=','Support')],context=context)
+        group_ids=self.pool.get('res.groups').search(cr,uid,[('category_id','=',category_id[0]),('name','=','Manager')],context=context)
+        group_obj = self.pool.get('res.groups').browse(cr, uid,group_ids[0],context=context)
+        part_ids =[]
+        if group_obj.users:
+            for usr in group_obj.users:
+                if usr.id!=SUPERUSER_ID:
+                    part_ids.append(usr.partner_id.id)
+            post_values = {
+               'partner_ids': [],
+               'subject':"Support Tickets Reached Deadline",
+               'body': body,
+               'record_name':"Tickets Reached Deadline"
+           }
+        msg_id = self.message_post(cr, uid, [], type='notification', subtype='mail.mt_comment', context=context, **post_values) 
+        for part in part_ids:
+            self.pool.get('mail.notification').create(cr, uid, {'partner_id':part,'message_id':msg_id,'starred':True})
+        return {}          
+                  
+    
+crm_helpdesk()
+
+class mail_mail(osv.Model):
+    """ Update of mail_mail class, to add the signin URL to notifications. """
+    _inherit = 'mail.mail'
+
+    def _get_partner_access_link(self, cr, uid, mail, partner=None, context=None):
+        return None
+        
